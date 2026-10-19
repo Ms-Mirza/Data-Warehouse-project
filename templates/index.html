@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data Warehouse Control Panel</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<header>
+  <h1>Data Warehouse Control Panel</h1>
+  <p class="subtitle">Python + MySQL ETL — bronze → silver → gold</p>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Run pipeline</h2>
+    <div class="button-row">
+      <button class="btn" data-stage="bronze">Run Bronze Load</button>
+      <button class="btn" data-stage="silver">Run Silver Load</button>
+      <button class="btn btn-primary" data-stage="all">Run Full Pipeline</button>
+    </div>
+    <p id="status" class="status">Idle.</p>
+    <pre id="log-console" class="log-console">Logs will appear here once you run a stage.</pre>
+  </section>
+
+  <section class="card">
+    <h2>Explore gold layer</h2>
+    <div class="button-row">
+      <select id="table-select">
+        {% for t in tables %}
+        <option value="{{ t }}">{{ t }}</option>
+        {% endfor %}
+      </select>
+      <button id="btn-load-table" class="btn">Load</button>
+      <span id="table-meta" class="table-meta"></span>
+    </div>
+    <div class="table-wrap">
+      <table id="data-table">
+        <thead><tr id="table-head"></tr></thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+    <div class="button-row">
+      <button id="btn-prev" class="btn btn-small" disabled>&larr; Prev</button>
+      <span id="page-indicator"></span>
+      <button id="btn-next" class="btn btn-small" disabled>Next &rarr;</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const logConsole = document.getElementById('log-console');
+const statusEl = document.getElementById('status');
+const stageButtons = document.querySelectorAll('[data-stage]');
+
+stageButtons.forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const stage = btn.dataset.stage;
+    stageButtons.forEach(b => b.disabled = true);
+    statusEl.textContent = `Running ${stage}…`;
+    statusEl.className = 'status status-running';
+    logConsole.textContent = '';
+
+    try {
+      const res = await fetch(`/api/run/${stage}`, { method: 'POST' });
+      const data = await res.json();
+      logConsole.textContent = data.logs || '(no output)';
+
+      if (data.success) {
+        statusEl.textContent = `"${stage}" completed successfully.`;
+        statusEl.className = 'status status-ok';
+      } else {
+        logConsole.textContent += '\n\n' + (data.error || '');
+        statusEl.textContent = `"${stage}" failed — see log below.`;
+        statusEl.className = 'status status-error';
+      }
+    } catch (err) {
+      statusEl.textContent = 'Request failed: ' + err;
+      statusEl.className = 'status status-error';
+    } finally {
+      stageButtons.forEach(b => b.disabled = false);
+    }
+  });
+});
+
+let currentPage = 1;
+
+async function loadTable(page) {
+  const table = document.getElementById('table-select').value;
+  const res = await fetch(`/api/gold/${table}?page=${page}`);
+  const data = await res.json();
+
+  if (data.error) {
+    document.getElementById('table-meta').textContent = data.error;
+    return;
+  }
+
+  currentPage = data.page;
+
+  document.getElementById('table-head').innerHTML =
+    data.columns.map(c => `<th>${c}</th>`).join('');
+
+  document.getElementById('table-body').innerHTML =
+    data.rows.length
+      ? data.rows.map(row =>
+          '<tr>' + data.columns.map(c => `<td>${row[c] ?? ''}</td>`).join('') + '</tr>'
+        ).join('')
+      : `<tr><td colspan="${data.columns.length}">No rows yet — run the pipeline first.</td></tr>`;
+
+  const totalPages = Math.max(Math.ceil(data.total / data.page_size), 1);
+  document.getElementById('table-meta').textContent = `${data.total} rows`;
+  document.getElementById('page-indicator').textContent = `Page ${currentPage} of ${totalPages}`;
+  document.getElementById('btn-prev').disabled = currentPage <= 1;
+  document.getElementById('btn-next').disabled = currentPage >= totalPages;
+}
+
+document.getElementById('btn-load-table').addEventListener('click', () => loadTable(1));
+document.getElementById('btn-prev').addEventListener('click', () => loadTable(currentPage - 1));
+document.getElementById('btn-next').addEventListener('click', () => loadTable(currentPage + 1));
+</script>
+</body>
+</html>
